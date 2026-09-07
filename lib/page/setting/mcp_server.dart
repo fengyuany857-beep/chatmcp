@@ -420,13 +420,26 @@ class _McpServerState extends State<McpServer> {
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                 ),
                 onPressed: () async {
-                  final cmdExists = await isCommandAvailable(serverConfig['command']);
-                  if (!cmdExists) {
+                  final command = (serverConfig['command']?.toString() ?? '').trim();
+                  final type = serverConfig['type']?.toString() ?? '';
+                  // Remote (sse/streamable) market entries carry a URL in `command`;
+                  // `which https://…` can never succeed, so validate the URL instead of PATH.
+                  // Mirrors initializeMcpServer: explicit sse/streamable are remote, explicit
+                  // stdio/inmemory are not, and only an unknown/empty type falls back to the command prefix.
+                  final isRemote = type == 'sse' || type == 'streamable' || (type != 'stdio' && type != 'inmemory' && command.startsWith('http'));
+                  if (isRemote) {
+                    final uri = Uri.tryParse(command);
+                    final isHttpUrl = uri != null && (uri.scheme == 'http' || uri.scheme == 'https') && uri.host.isNotEmpty;
+                    if (!isHttpUrl) {
+                      showErrorDialog(context, 'Server command must be a valid http(s) URL');
+                      return;
+                    }
+                  } else if (!await isCommandAvailable(command)) {
                     showErrorDialog(context, l10n.commandNotExist(serverConfig['command'], getPlatformPath() ?? ''));
-                  } else {
-                    Logger.root.info('Install server configuration: $serverName ${serverConfig['command']} ${serverConfig['args']}');
-                    await _showEditDialog(context, serverName, provider, serverConfig);
+                    return;
                   }
+                  Logger.root.info('Install server configuration: $serverName ${serverConfig['command']} ${serverConfig['args']}');
+                  await _showEditDialog(context, serverName, provider, serverConfig);
                 },
               ),
             ],
