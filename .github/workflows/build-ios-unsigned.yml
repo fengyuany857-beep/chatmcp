@@ -1,0 +1,129 @@
+name: Build iOS Unsigned IPA
+
+on:
+  push:
+    branches:
+      - build/ios-selfsign
+    paths:
+      - '.github/workflows/build-ios-unsigned.yml'
+      - 'ios/**'
+      - 'lib/**'
+      - 'assets/**'
+      - 'pubspec.yaml'
+      - 'pubspec.lock'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios-unsigned:
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter 3.32.5
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.32.5'
+          channel: 'stable'
+          cache: true
+
+      - name: Print build environment
+        run: |
+          set -euxo pipefail
+          flutter --version
+          dart --version
+          xcodebuild -version
+          pod --version
+          sw_vers
+          echo "SOURCE_SHA=${GITHUB_SHA}"
+
+      - name: Create required empty .env
+        run: touch .env
+
+      - name: Install Flutter dependencies
+        run: flutter pub get
+
+      - name: Install CocoaPods dependencies
+        run: |
+          set -euxo pipefail
+          cd ios
+          pod install
+
+      - name: Build iOS Release app without code signing
+        run: |
+          set -euxo pipefail
+          flutter build ios --release --no-codesign
+
+      - name: Package and verify unsigned IPA
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          APP_PATH="$(find build/ios/iphoneos -maxdepth 1 -type d -name '*.app' -print -quit)"
+          if [ -z "$APP_PATH" ]; then
+            echo "No .app found under build/ios/iphoneos" >&2
+            find build/ios -maxdepth 3 -print || true
+            exit 1
+          fi
+
+          APP_NAME="$(basename "$APP_PATH")"
+          OUT_DIR="$GITHUB_WORKSPACE/build/ipa"
+          PAYLOAD_DIR="$OUT_DIR/Payload"
+          IPA_FILE="$OUT_DIR/ChatMCP-unsigned.ipa"
+
+          rm -rf "$OUT_DIR"
+          mkdir -p "$PAYLOAD_DIR"
+          ditto "$APP_PATH" "$PAYLOAD_DIR/$APP_NAME"
+
+          cd "$OUT_DIR"
+          /usr/bin/zip -qry "$(basename "$IPA_FILE")" Payload
+
+          echo "=== IPA contents ==="
+          /usr/bin/unzip -l "$IPA_FILE" | tee ipa-contents.txt
+
+          test -d "Payload/$APP_NAME"
+          test -f "Payload/$APP_NAME/Info.plist"
+
+          EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "Payload/$APP_NAME/Info.plist")"
+          if [ -z "$EXECUTABLE" ] || [ ! -f "Payload/$APP_NAME/$EXECUTABLE" ]; then
+            echo "Missing app executable: Payload/$APP_NAME/$EXECUTABLE" >&2
+            exit 1
+          fi
+
+          if [ -d "Payload/$APP_NAME/Frameworks" ]; then
+            if ! find "Payload/$APP_NAME/Frameworks" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
+              echo "Frameworks directory exists but is empty" >&2
+              exit 1
+            fi
+          fi
+
+          if ! /usr/bin/unzip -Z1 "$IPA_FILE" | grep -q "^Payload/[^/]\+\.app/Info\.plist$"; then
+            echo "IPA is missing Payload/<AppName>.app/Info.plist" >&2
+            exit 1
+          fi
+
+          echo "=== File metadata ==="
+          ls -lh "$IPA_FILE"
+          /usr/bin/stat -f 'Size: %z bytes' "$IPA_FILE"
+          shasum -a 256 "$IPA_FILE" | tee SHA256SUMS.txt
+
+          echo "APP_PATH=$APP_PATH"
+          echo "APP_NAME=$APP_NAME"
+          echo "IPA_FILE=$IPA_FILE"
+          echo "EXECUTABLE=$EXECUTABLE"
+
+      - name: Upload unsigned IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChatMCP-iOS-unsigned-${{ github.sha }}
+          path: |
+            build/ipa/ChatMCP-unsigned.ipa
+            build/ipa/SHA256SUMS.txt
+            build/ipa/ipa-contents.txt
+          if-no-files-found: error
+          retention-days: 30
