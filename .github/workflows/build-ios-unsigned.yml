@@ -102,7 +102,7 @@ jobs:
             fi
           fi
 
-          if ! /usr/bin/unzip -Z1 "$IPA_FILE" | grep -q "^Payload/[^/]\+\.app/Info\.plist$"; then
+          if ! /usr/bin/unzip -Z1 "$IPA_FILE" | grep -E -q '^Payload/[^/]+\.app/Info\.plist$'; then
             echo "IPA is missing Payload/<AppName>.app/Info.plist" >&2
             exit 1
           fi
