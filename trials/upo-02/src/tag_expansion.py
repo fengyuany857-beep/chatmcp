@@ -20,22 +20,40 @@ class TagExpansion:
         return asdict(self)
 
 
+def _decode_json_object(value: Any) -> dict[str, Any] | None:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            obj = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return obj if isinstance(obj, dict) else None
+    return None
+
+
 def parse_tool_json(result: Any) -> dict[str, Any]:
-    """Extract exact JSON object returned by a FastMCP text result."""
+    """Extract the tool's JSON object without changing its semantics.
+
+    FastMCP may wrap a string return value as structuredContent={"result":
+    "<json string>"}. Prefer an already-structured domain object; otherwise
+    unwrap only that transport wrapper, then fall back to TextContent JSON.
+    """
     structured = getattr(result, "structuredContent", None)
     if isinstance(structured, dict):
-        return structured
+        if any(k in structured for k in ("related_tags", "implications", "posts", "query", "tag")):
+            return structured
+        if set(structured) == {"result"}:
+            obj = _decode_json_object(structured.get("result"))
+            if obj is not None:
+                return obj
+
     for block in getattr(result, "content", []) or []:
         text = getattr(block, "text", None)
-        if not text:
-            continue
-        try:
-            obj = json.loads(text)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(obj, dict):
+        obj = _decode_json_object(text)
+        if obj is not None:
             return obj
-    raise ValueError("MCP tool result did not contain a JSON object")
+    raise ValueError("MCP tool result did not contain a decodable JSON object")
 
 
 def cooccurrence_expansions(payload: dict[str, Any], *, limit: int = 8) -> list[TagExpansion]:
@@ -45,8 +63,6 @@ def cooccurrence_expansions(payload: dict[str, Any], *, limit: int = 8) -> list[
         tag = str(row.get("name") or "")
         if not tag or tag == source:
             continue
-        # Preserve upstream's frequency metric. We do not invent a new
-        # similarity score here.
         weight = float(row.get("frequency") or 0.0)
         out.append(TagExpansion(
             source_tag=source,
@@ -89,7 +105,7 @@ def implication_expansions(payload: dict[str, Any], *, limit: int = 8) -> list[T
 
 
 def expanded_preference_tags(cooccurrence: list[TagExpansion], implication: list[TagExpansion], *, limit: int = 8) -> list[str]:
-    """Thin composition glue: preserve source tool ordering, dedupe names."""
+    """Thin composition glue: preserve upstream weighting and relation identity."""
     ordered = sorted(cooccurrence, key=lambda x: -x.weight) + implication
     seen: set[str] = set()
     tags: list[str] = []
