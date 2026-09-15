@@ -45,13 +45,19 @@ jobs:
           python --version | tee artifacts/trial03/python-version.txt
           python -m pip freeze > artifacts/trial03/pip-freeze.txt
           git -C upstream rev-parse HEAD > artifacts/trial03/upstream-commit.txt
-          sha256sum src/near_duplicate.py scripts/run_trial03_near_duplicate.py > artifacts/trial03/trial-code-sha256.txt
+          sha256sum src/near_duplicate.py scripts/run_trial03_near_duplicate.py scripts/run_trial03b_cross_provider.py > artifacts/trial03/trial-code-sha256.txt
 
-      - name: Run Trial 03 real E2E
+      - name: Run Trial 03 controlled plus live E2E
         working-directory: trials/upo-03
         env:
           PYTHONUNBUFFERED: '1'
         run: python scripts/run_trial03_near_duplicate.py
+
+      - name: Run Trial 03B cross-provider probe
+        working-directory: trials/upo-03
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: python scripts/run_trial03b_cross_provider.py
 
       - name: Upload Trial 03 evidence
         if: always()
